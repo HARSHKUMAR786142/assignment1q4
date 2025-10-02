@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Deadlock & Recovery Visualizer</title>
+<style>
+  :root{--bg:#0f172a;--card:#0b1220;--accent:#06b6d4;--ok:#10b981;--warn:#f59e0b;--bad:#ef4444}
+  *{box-sizing:border-box}
+  body{font-family:Inter,system-ui,Arial;margin:0;background:linear-gradient(180deg,#071033 0%, #081426 100%);color:#e6eef6}
+  .wrap{max-width:1100px;margin:18px auto;padding:18px}
+  header{display:flex;align-items:center;justify-content:space-between}
+  h1{margin:0;font-size:20px}
+  .grid{display:grid;grid-template-columns:1fr 420px;gap:16px;margin-top:14px}
+  .card{background:rgba(255,255,255,0.03);padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.04)}
+  label{font-size:13px;color:#9fd8e6}
+  input, select{width:100%;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:#e6eef6;margin-top:6px}
+  button{background:var(--accent);border:none;color:#042331;padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:700}
+  .muted{color:#9fbfca;font-size:13px}
+  table{border-collapse:collapse;width:100%;margin-top:10px}
+  th,td{border:1px solid rgba(255,255,255,0.04);padding:6px;text-align:center}
+  .svg-box{background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.02));border-radius:8px;padding:8px}
+  .log{background:rgba(255,255,255,0.02);padding:10px;border-radius:8px;max-height:220px;overflow:auto;font-family:ui-monospace,monospace}
+  .chip{display:inline-block;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,0.02);margin:4px 6px}
+  .danger{color:var(--bad)}
+  .good{color:var(--ok)}
+  .highlight{stroke:var(--bad);stroke-width:3}
+  .edge{stroke:#9fbfca;stroke-width:1.6}
+  .node{fill:#06192a;stroke:#06b6d4;stroke-width:1.6}
+  .node.dead{fill:#4b1f1f;stroke:#ef4444}
+  .small{font-size:13px}
+  footer{margin-top:12px;color:#9fbfca;font-size:13px}
+  @media(max-width:980px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>🔁 Deadlock & Recovery Visualizer</h1>
+      <div class="muted">Create processes & resources, simulate allocation/requests, detect deadlocks, run Banker and try recovery strategies.</div>
+    </div>
+    <div>
+      <button id="resetAll">Reset</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <main class="card">
+      <h2 style="margin-top:0">Configuration</h2>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:180px">
+          <label>Process name</label>
+          <input id="procName" placeholder="e.g., P1" value="P1" />
+          <button id="addProc" style="margin-top:8px">Add Process</button>
+        </div>
+        <div style="flex:1;min-width:180px">
+          <label>Resource name</label>
+          <input id="resName" placeholder="e.g., R1" value="R1" />
+          <button id="addRes" style="margin-top:8px">Add Resource</button>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <label>Select Process</label>
+        <select id="selProc"></select>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <div style="flex:1"><label>Allocate Resource</label><select id="allocRes"></select></div>
+          <div style="flex:1"><label>Request Resource</label><select id="reqRes"></select></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="doAlloc">Allocate</button>
+          <button id="doReq">Request</button>
+          <button id="doRelease">Release All</button>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <h3 style="margin:6px 0">Banker's Algorithm</h3>
+        <div class="small">Check if current state is safe.</div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="runBanker">Run Banker</button>
+          <button id="detectDeadlock" class="alt">Detect Deadlock (Wait-for graph)</button>
+        </div>
+        <div id="bankerResult" class="small" style="margin-top:8px"></div>
+      </div>
+
+      <div style="margin-top:12px">
+        <h3 style="margin:6px 0">Recovery</h3>
+        <div class="small">If deadlock detected: choose a victim to abort or preempt resources.</div>
+        <label>Select victim process</label>
+        <select id="victimSelect"></select>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="abortProc">Abort (kill)</button>
+          <button id="preemptRes">Preempt one resource</button>
+        </div>
+      </div>
+
+      <h3 style="margin-top:14px">System State</h3>
+      <div id="matrices"></div>
+    </main>
+
+    <aside class="card">
+      <h3 style="margin-top:0">Visualization</h3>
+      <div class="svg-box">
+        <svg id="graphSvg" width="380" height="360"></svg>
+      </div>
+
+      <h4 style="margin-top:12px">Logs</h4>
+      <div id="log" class="log"></div>
+
+      <h4 style="margin-top:12px">Notes</h4>
+      <div class="small">This visualizer is educational: Banker implementation assumes single-unit resources and integer allocation counts. Recovery strategies shown are simplified.</div>
+    </aside>
+  </div>
+
+  <footer>Tip: add a few processes and resources, allocate resources to create a cycle (e.g., P1 holds R1 and requests R2 while P2 holds R2 and requests R1) then detect deadlock.</footer>
+</div>
+
+<script>
+// Data structures
+let processes = []; // [{id:'P1', allocated:{R1:1}, requested:{R2:1}, alive:true}]
+let resources = []; // ['R1','R2']
+let logEl = document.getElementById('log');
+
+function log(msg){ const p = document.createElement('div'); p.textContent = '['+new Date().toLocaleTimeString()+'] ' + msg; logEl.prepend(p); }
+
+// UI elements
+const selProc = document.getElementById('selProc');
+const allocRes = document.getElementById('allocRes');
+const reqRes = document.getElementById('reqRes');
+const matricesDiv = document.getElementById('matrices');
+const graphSvg = document.getElementById('graphSvg');
+const victimSelect = document.getElementById('victimSelect');
+
+function refreshSelectors(){
+  selProc.innerHTML=''; allocRes.innerHTML=''; reqRes.innerHTML=''; victimSelect.innerHTML='';
+  processes.forEach(p=>{ if(p.alive){ const o=document.createElement('option'); o.value=p.id; o.textContent=p.id; selProc.appendChild(o); const v=document.createElement('option'); v.value=p.id; v.textContent=p.id; victimSelect.appendChild(v); }});
+  resources.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; allocRes.appendChild(o); const q=document.createElement('option'); q.value=r; q.textContent=r; reqRes.appendChild(q); });
+  renderMatrices(); drawGraph();
+}
+
+// Add process/resource
+document.getElementById('addProc').addEventListener('click', ()=>{
+  const name = document.getElementById('procName').value.trim() || ('P'+(processes.length+1));
+  if(processes.find(p=>p.id===name)){ alert('Process exists'); return }
+  processes.push({id:name, allocated:{}, requested:{}, alive:true});
+  log('Added process '+name);
+  refreshSelectors();
+});
+
+document.getElementById('addRes').addEventListener('click', ()=>{
+  const name = document.getElementById('resName').value.trim() || ('R'+(resources.length+1));
+  if(resources.includes(name)){ alert('Resource exists'); return }
+  resources.push(name);
+  log('Added resource '+name);
+  refreshSelectors();
+});
+
+// Allocate / Request / Release
+document.getElementById('doAlloc').addEventListener('click', ()=>{
+  const p = selProc.value; const r = allocRes.value; if(!p||!r){ alert('select'); return }
+  const proc = processes.find(x=>x.id===p);
+  proc.allocated[r] = (proc.allocated[r]||0)+1; // single-unit model
+  // if previously requested and now allocated, clear request
+  if(proc.requested[r]) delete proc.requested[r];
+  log(p + ' allocated ' + r);
+  refreshSelectors();
+});
+
+document.getElementById('doReq').addEventListener('click', ()=>{
+  const p = selProc.value; const r = reqRes.value; if(!p||!r){ alert('select'); return }
+  const proc = processes.find(x=>x.id===p);
+  proc.requested[r] = (proc.requested[r]||0)+1;
+  log(p + ' requested ' + r);
+  refreshSelectors();
+});
+
+document.getElementById('doRelease').addEventListener('click', ()=>{
+  const p = selProc.value; if(!p){ alert('select'); return }
+  const proc = processes.find(x=>x.id===p);
+  proc.allocated = {}; proc.requested = {}; log(p + ' released all resources'); refreshSelectors();
+});
+
+// Render matrices
+function renderMatrices(){
+  matricesDiv.innerHTML='';
+  const div = document.createElement('div');
+  const t1 = document.createElement('div'); t1.innerHTML = '<strong>Allocation matrix</strong>';
+  const table = document.createElement('table'); const thead=document.createElement('thead'); const tr=document.createElement('tr'); tr.appendChild(cell('Proc/Res'));
+  resources.forEach(r=>tr.appendChild(cell(r))); thead.appendChild(tr); table.appendChild(thead);
+  const tbody=document.createElement('tbody');
+  processes.forEach(p=>{
+    const tr=document.createElement('tr'); tr.appendChild(cell(p.id));
+    resources.forEach(r=>{ tr.appendChild(cell(p.allocated[r]||0)); }); tbody.appendChild(tr);
+  }); table.appendChild(tbody); t1.appendChild(table); div.appendChild(t1);
+
+  const t2 = document.createElement('div'); t2.style.marginTop='10px'; t2.innerHTML = '<strong>Request matrix</strong>';
+  const table2=document.createElement('table'); const thead2=document.createElement('thead'); const tr2=document.createElement('tr'); tr2.appendChild(cell('Proc/Res')); resources.forEach(r=>tr2.appendChild(cell(r))); thead2.appendChild(tr2); table2.appendChild(thead2);
+  const tbody2=document.createElement('tbody'); processes.forEach(p=>{ const tr=document.createElement('tr'); tr.appendChild(cell(p.id)); resources.forEach(r=> tr.appendChild(cell(p.requested[r]||0))); tbody2.appendChild(tr); }); table2.appendChild(tbody2); t2.appendChild(table2); div.appendChild(t2);
+
+  matricesDiv.appendChild(div);
+}
+
+function cell(text){ const td=document.createElement('td'); td.textContent=text; return td }
+
+// Draw process-resource allocation graph
+function drawGraph(highlightCycle){
+  // layout: processes on left, resources on right
+  while(graphSvg.firstChild) graphSvg.removeChild(graphSvg.firstChild);
+  const w = graphSvg.clientWidth; const h = graphSvg.clientHeight;
+  const pCount = processes.length; const rCount = resources.length;
+  const pGap = Math.max(40, h/(pCount+1)); const rGap = Math.max(40, h/(rCount+1));
+  const pCoords = {}; const rCoords = {};
+  processes.forEach((p,i)=>{ pCoords[p.id] = {x:80, y: (i+1)*pGap}; });
+  resources.forEach((r,i)=>{ rCoords[r] = {x:w-80, y: (i+1)*rGap}; });
+  // draw edges: allocation (resource <- process) and request (resource -> process)
+  // to build wait-for, we need edges process->process if req resource held by other
+  // draw allocation edges (process -> resource with arrow)
+  const ns = document.createElementNS('http://www.w3.org/2000/svg','g');
+  // helper
+  function drawEdge(x1,y1,x2,y2,cls,marker){
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', M ${x1} ${y1} C ${(x1+x2)/2} ${y1} ${(x1+x2)/2} ${y2} ${x2} ${y2});
+    path.setAttribute('class','edge');
+    if(cls) path.setAttribute('class','edge '+cls);
+    ns.appendChild(path);
+  }
+
+  // allocations: from resource to process? We'll draw process -> resource (allocated)
+  processes.forEach(p=>{
+    Object.keys(p.allocated).forEach(r=>{
+      drawEdge(pCoords[p.id].x+24,pCoords[p.id].y, rCoords[r].x-24, rCoords[r].y, 'alloc');
+    });
+    Object.keys(p.requested).forEach(r=>{
+      drawEdge(rCoords[r].x-24, rCoords[r].y, pCoords[p.id].x+24, pCoords[p.id].y, 'req');
+    });
+  });
+
+  graphSvg.appendChild(ns);
+
+  // draw nodes
+  for(const p of processes){
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    const coord = pCoords[p.id];
+    const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    circle.setAttribute('cx',coord.x); circle.setAttribute('cy',coord.y); circle.setAttribute('r',20);
+    circle.setAttribute('class','node'+(p.alive? '':' dead'));
+    const text = document.createElementNS('http://www.w3.org/2000/svg','text'); text.setAttribute('x',coord.x); text.setAttribute('y',coord.y+5); text.setAttribute('text-anchor','middle'); text.setAttribute('font-size','12'); text.textContent = p.id;
+    g.appendChild(circle); g.appendChild(text);
+    graphSvg.appendChild(g);
+  }
+  for(const r of resources){
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    const coord = rCoords[r];
+    const rect = document.createElementNS('http://www.w3.org/2000/svg','rect'); rect.setAttribute('x',coord.x-24); rect.setAttribute('y',coord.y-16); rect.setAttribute('width',48); rect.setAttribute('height',32); rect.setAttribute('rx',6); rect.setAttribute('class','node');
+    const text = document.createElementNS('http://www.w3.org/2000/svg','text'); text.setAttribute('x',coord.x); text.setAttribute('y',coord.y+5); text.setAttribute('text-anchor','middle'); text.setAttribute('font-size','12'); text.textContent = r;
+    g.appendChild(rect); g.appendChild(text); graphSvg.appendChild(g);
+  }
+
+  // if detect cycle, highlight edges/nodes in cycle
+  if(highlightCycle){
+    // highlight nodes and edges in cycle
+    const cycleNodes = highlightCycle; // array of process ids in cycle
+    // redraw overlays
+    for(const id of cycleNodes){
+      // find process circle and add class
+      const circles = graphSvg.querySelectorAll('circle');
+      circles.forEach(c=>{ if(c.nextSibling && c.nextSibling.textContent===id){ c.classList.add('dead'); c.setAttribute('stroke','#ef4444'); c.setAttribute('stroke-width',3); } });
+    }
+    log('Deadlock cycle detected: ' + cycleNodes.join(' -> '));
+  }
+}
+
+// Deadlock detection using wait-for graph (edges P_i -> P_j if Pi requests resource held by Pj)
+function buildWaitForGraph(){
+  const wf = {}; processes.forEach(p=>{ wf[p.id]=new Set(); });
+  // for every requesting process and each requested resource, find holders
+  processes.forEach(p=>{
+    Object.keys(p.requested).forEach(r=>{
+      processes.forEach(q=>{
+        if(q.id!==p.id && (q.allocated[r]||0)>0){ wf[p.id].add(q.id); }
+      });
+    });
+  });
+  return wf; // map to sets
+}
+
+function detectCycle(){
+  const wf = buildWaitForGraph();
+  const color = {}; const stack=[]; let foundCycle=null;
+  function dfs(u){
+    color[u]='grey'; stack.push(u);
+    for(const v of wf[u]){
+      if(color[v]==='grey'){
+        // cycle found: extract cycle from stack
+        const idx = stack.indexOf(v); if(idx>=0) foundCycle = stack.slice(idx).concat(v); return true;
+      }
+      if(!color[v]){ if(dfs(v)) return true }
+    }
+    color[u]='black'; stack.pop(); return false;
+  }
+  for(const u of Object.keys(wf)){ if(!color[u]){ if(dfs(u)) break } }
+  return foundCycle; // array or null
+}
+
+// Banker's algorithm (single-unit resources simplified)
+function bankersAlgorithm(){
+  // available: resource -> count (we assume total units = sum allocated + available; single-unit default: one unit each resource)
+  const total = {}; resources.forEach(r=> total[r]=1);
+  const allocated = {}; processes.forEach(p=> allocated[p.id]=Object.assign({},p.allocated));
+  const need = {}; processes.forEach(p=> need[p.id]=Object.assign({},p.requested));
+  // compute available = total - sum allocated
+  const available = {}; resources.forEach(r=>{
+    let used = 0; processes.forEach(p=> used += (p.allocated[r]||0)); available[r] = Math.max(0, total[r]-used);
+  });
+  // safety algorithm: try to find order
+  const finish = {}; processes.forEach(p=> finish[p.id]= false);
+  const safeSeq = [];
+  let progress=true;
+  while(progress){ progress=false; for(const p of processes){ if(finish[p.id]||!p.alive) continue; // skip finished or dead
+      // if need of p <= available
+      let ok=true; for(const r of resources){ const needCount = need[p.id][r]||0; if(needCount> (available[r]||0)) { ok=false; break } }
+      if(ok){ // simulate allocation completion: release allocated to available
+        resources.forEach(r=> available[r] += (allocated[p.id][r]||0)); finish[p.id]=true; safeSeq.push(p.id); progress=true; }
+    }}
+  const allFinished = processes.every(p=> finish[p.id]||!p.alive);
+  return {safe: allFinished, seq: safeSeq, available};
+}
+
+// Recovery: abort process
+document.getElementById('abortProc').addEventListener('click', ()=>{
+  const victim = victimSelect.value; if(!victim){ alert('select a victim'); return }
+  const p = processes.find(x=>x.id===victim); if(!p) return;
+  // release its allocations
+  const released = Object.assign({}, p.allocated);
+  p.allocated = {}; p.requested = {}; p.alive = false;
+  log('Aborted process '+victim+' — released: ' + JSON.stringify(released));
+  refreshSelectors();
+});
+
+// Recovery: preempt one resource from victim
+document.getElementById('preemptRes').addEventListener('click', ()=>{
+  const victim = victimSelect.value; if(!victim){ alert('select a victim'); return }
+  const p = processes.find(x=>x.id===victim); if(!p) return;
+  // find any allocated resource to preempt
+  const allocKeys = Object.keys(p.allocated);
+  if(allocKeys.length===0){ alert('victim has no allocated resources'); return }
+  const r = allocKeys[0]; const count = p.allocated[r]; // reduce by one
+  p.allocated[r] = count-1; if(p.allocated[r]===0) delete p.allocated[r];
+  log('Preempted 1 unit of '+r+' from '+victim+' and returned to pool');
+  refreshSelectors();
+});
+
+// Detect deadlock button
+document.getElementById('detectDeadlock').addEventListener('click', ()=>{
+  const cycle = detectCycle();
+  if(cycle){ drawGraph(cycle); alert('Deadlock detected: ' + cycle.join(' -> ')); }
+  else{ drawGraph(); alert('No deadlock detected'); }
+});
+
+// Run Banker
+document.getElementById('runBanker').addEventListener('click', ()=>{
+  const res = bankersAlgorithm();
+  const el = document.getElementById('bankerResult');
+  if(res.safe){ el.innerHTML = '<span class="good">SAFE state</span>. Safe sequence: ' + res.seq.join(' -> '); log('Banker: SAFE; seq: '+res.seq.join(',')); }
+  else{ el.innerHTML = '<span class="danger">UNSAFE state</span>. No safe sequence found.'; log('Banker: UNSAFE'); }
+});
+
+// Reset all
+document.getElementById('resetAll').addEventListener('click', ()=>{
+  processes = []; resources = []; log('System reset'); refreshSelectors(); });
+
+// seed example to demonstrate
+(function seed(){
+  resources = ['R1','R2'];
+  processes = [ {id:'P1', allocated:{R1:1}, requested:{R2:1}, alive:true}, {id:'P2', allocated:{R2:1}, requested:{R1:1}, alive:true} ];
+  log('Seed example added: P1 holds R1->requests R2; P2 holds R2->requests R1');
+  refreshSelectors();
+})();
+
+</script>
+</body>
+</html>
